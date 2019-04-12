@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Redshift scheduled loading service in the ECS
+
+Parameters:
+
+  ProductionEnvironment:
+    Type: String
+
+  AccessKey:
+    Type: String
+
+  SecretKey:
+    Type: String
+
+  ECSHostGroupString:
+    Type: String
+
+  ECSHostVPC:
+    Type: String
+
+Conditions:
+  CreateProdResource: !Equals [ !Ref ProductionEnvironment, prod ]
+
+Mappings:
+
+  AWSRegionToAMI:
+    us-east-2:
+      AMI: ami-09a64272e7fe706b6
+    us-east-1:
+      AMI: ami-0b9a214f40c38d5eb
+    us-west-2:
+      AMI: ami-00430184c7bb49914
+    us-west-1:
+      AMI: ami-0e7dd5fe55b87a5fe
+
+Resources:
+
+  TurboEMRCluster:
+    Type: AWS::EMR::Cluster
+    Properties:
+      Configurations:
+        - Classification: hadoop-env
+          Configurations:
+          - Classification: export
+            ConfigurationProperties:
+              AWS_REGION: !Ref AWS::Region
+              PRODUCTION_ENV: !Ref ProductionEnvironment
+              HADOOP_HEAPSIZE: 4072
+        - Classification: spark-env
+          Configurations:
+          - Classification: export
+            ConfigurationProperties:
+              AWS_REGION: !Ref AWS::Region
+              PRODUCTION_ENV: !Ref ProductionEnvironment
+        - Classification: yarn-site
+          ConfigurationProperties:
+            yarn.nodemanager.vmem-check-enabled: false
+            yarn.nodemanager.resource.memory-mb: 494592
+            yarn.scheduler.maximum-allocation-mb: 494592
+        - Classification: spark
+          ConfigurationProperties:
+            maximizeResourceAllocation: false
+        - Classification: spark-defaults
+          ConfigurationProperties:
+            spark.dynamicAllocation.enabled: false
+            spark.executor.instances: 20
+            spark.yarn.executor.memoryOverhead: 3072
+            spark.executor.memory: 20G
+            spark.executor.cores: 3
+            spark.yarn.driver.memoryOverhead: 3072
+            spark.driver.memory: 20G
+            spark.driver.cores: 3
+            spark.default.parallelism: 240
+      Instances:
+        MasterInstanceGroup:
+          InstanceCount: 1
+          InstanceType: "m5.xlarge"
+          Market: "ON_DEMAND"
+          Name: "Master"
+        CoreInstanceGroup:
+          InstanceCount: 1
+          InstanceType: "r4.16xlarge"
+          EbsConfiguration:
+            EbsBlockDeviceConfigs:
+              - VolumeSpecification:
+                  SizeInGB: 640
+                  VolumeType: gp2
+            EbsOptimized: true
+          Market: "ON_DEMAND"
+          Name: "Core"
+        EmrManagedMasterSecurityGroup: !Ref ECSHostGroupString
+        EmrManagedSlaveSecurityGroup: !Ref ECSHostGroupString
+        Ec2SubnetId: !Ref ECSHostVPC
+      Name: !Sub 'Pipeline-EMR-${AWS::Region}-${ProductionEnvironment}-Turbo'
+      JobFlowRole: "EMR_EC2_DefaultRole"
+      ServiceRole: "EMR_DefaultRole"
+      ReleaseLabel: "emr-5.17.0"
+      LogUri: !Sub 's3://pipeline-${AWS::Region}-${ProductionEnvironment}-good/log/elasticmapreduce'
+      Applications:
+        - Name: Hive
+        - Name: Pig
+        - Name: Hue
+        - Name: Spark
+        - Name: Hadoop
+
+  ServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'rs-load-role-${AWS::StackName}-turbo'
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": { "Service": [ "events.amazonaws.com" ]},
+            "Action": [ "sts:AssumeRole" ]
+          }]
+        }
+      Policies:
+        - PolicyName: !Sub 'rs-load-role-${AWS::StackName}-turbo'
+          PolicyDocument:
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Action": [
+                  "ecs:RunTask",
+                  "logs:*",
+                  "ec2:AuthorizeSecurityGroupIngress",
+                  "ec2:Describe*",
+                  "iam:ListInstanceProfiles",
+                  "iam:ListRoles",
+                  "iam:PassRole"
+                ],
+                "Resource": "*"
+              }]
+            }
+
+Outputs:
+
+  TurboEMRCluster:
+    Value: !Ref TurboEMRCluster
+    Export:
+      Name: 'Turbo-EMR'

@@ -1,0 +1,86 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+  vars:
+    - container_path: ../container_files
+
+  tasks:
+
+    # Iglu Building Container
+    - name: provisioning emr.yml aws_region
+      replace:
+        path: '{{ container_path }}/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/emr.yml'
+        regexp: AWS_REGION
+        replace: '{{ aws_region }}'
+
+    - name: provisioning emr.yml aws_region
+      replace:
+        path: '{{ container_path }}/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/emr.yml'
+        regexp: PRODUCTION_ENV
+        replace: '{{ production_env }}'
+
+    - name: provisioning rs target with db password
+      replace:
+        path: '{{ container_path }}/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/targets/redshift.conf'
+        regexp: RS_PASSWORD
+        replace: '{{ rs_password }}'
+
+    - name: building rs-load-service-turbo image
+      command: >
+        sudo docker build -t 
+        rs-loader-turbo-repo-{{ aws_region }}-{{ production_env }} 
+        {{ container_path }}/rs-loader-turbo_dir/
+
+    - name: tagging rs-load-service-turbo image
+      command: >
+        sudo docker tag
+        rs-loader-turbo-repo-{{ aws_region }}-{{ production_env }}:latest
+        YOUR_ECR_IMAGE_FOR_RS_TURBO_LOADING:latest
+
+    - name: pushing rs-load-service-turbo image
+      command: >
+        sudo docker push
+        YOUR_ECR_IMAGE_FOR_RS_TURBO_LOADING:latest
+
+    # Create resources
+    - name: "Formation: pipeline-vpc-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "pipeline-vpc-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/vpc.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      register: vpc_data
+
+    - name: "Formation: security-config-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "security-config-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/security-config.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      register: stack_iglu_access_sg
+
+    - name: "Formation: rs-load-service-{{ aws_region }}-{{ production_env }}-turbo"
+      cloudformation:
+        stack_name: "rs-load-service-{{ aws_region }}-{{ production_env }}-turbo"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/rs-load-service-turbo.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+          AccessKey: "{{aws_access_key}}"
+          SecretKey: "{{aws_secret_key}}"
+          ECSHostGroupString: "{{ stack_iglu_access_sg.stack_outputs.ECSHostSecurityGroup }}"
+          ECSHostVPC: "{{ vpc_data.stack_outputs.Subnet2 }}"

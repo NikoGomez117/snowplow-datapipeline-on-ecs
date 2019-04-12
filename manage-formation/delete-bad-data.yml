@@ -1,0 +1,20 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+
+  tasks:
+    - name: get bad bucket items
+      aws_s3:
+        bucket: 'pipeline-{{ aws_region }}-{{production_env}}-bad'
+        mode: list
+      register: s3_bucket_items
+
+    - name: delete bad objects from bucket
+      aws_s3:
+        bucket: 'pipeline-{{ aws_region }}-{{production_env}}-bad'
+        object: '{{ item }}'
+        mode: delobj
+      with_items: "{{ s3_bucket_items.s3_keys }}"

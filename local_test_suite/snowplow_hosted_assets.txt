@@ -1,0 +1,18 @@
+Currently, we are pinned to:
+
+Scala Stream Collector:
+https://bintray.com/snowplow/snowplow-generic/snowplow-scala-stream-collector/0.14.0#files:
+
+using:
+https://bintray.com/snowplow/snowplow-generic/download_file?file_path=snowplow_scala_stream_collector_kinesis_0.14.0.zip
+
+
+Scala Stream Enricher:
+https://bintray.com/snowplow/snowplow-generic/snowplow-stream-enrich/0.18.0#files
+
+usring:
+https://bintray.com/snowplow/snowplow-generic/download_file?file_path=snowplow_stream_enrich_kinesis_0.18.0.zip
+
+
+Simple jar that needs to be run with a config
+

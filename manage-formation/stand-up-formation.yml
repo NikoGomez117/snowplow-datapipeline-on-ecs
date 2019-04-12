@@ -1,0 +1,152 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+
+  tasks:
+    - name: "Formation: pipeline-vpc-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "pipelin-vpc-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/vpc.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      register: vpc_data
+      when: targets is search("all") or targets is search("vpc") or targets is search("rs-load-service")
+
+    - name: "Formation: exec-iam-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "exec-iam-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/exec-iam.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{ production_env }}"
+      when: targets is search("all") or targets is search("exec-iam")
+
+    - name: "Formation: security-config-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "security-config-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/security-config.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      register: stack_iglu_access_sg
+      when: targets is search("all") or targets is search("security-config") or targets is search("rs-load-service")
+
+    - name: "Formation: storage-systems-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "storage-systems-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/storage-systems.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      when: targets is search("all") or targets is search("storage-systems")
+
+    - name: "Uploading Json paths to S3"
+      s3_sync:
+        bucket: "pipeline-{{ aws_region }}-{{ production_env }}-iglu"
+        file_root: '{{ jsonpath_dir }}'
+        region: '{{ aws_region }}'
+      when: targets is search("all") or targets is search("storage-systems")
+
+    - name: "Formation: pipeline-ecs-cluster-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "pipeline-ecs-cluster-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/ecs-cluster.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      when: targets is search("all") or targets is search("ecs-cluster")
+
+    - name: "Formation: iglu-repo-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "iglu-repo-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/iglu-repo.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      when: targets is search("all") or targets is search("iglu-repo")
+
+    - name: "Formation: collection-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "collection-service-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/collection-service.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      when: targets is search("all") or targets is search("collection-service")
+
+    - name: "Formation: enrichment-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "enrichment-service-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/enrichment-service.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      when: targets is search("all") or targets is search("enrichment-service")
+
+    - name: "Formation: bad-es-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "bad-es-service-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/bad-es-service.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      when: targets is search("all") or targets is search("bad-es-service")
+
+    - name: "Formation: s3load-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "s3load-service-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/s3load-service.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      when: targets is search("all") or targets is search("s3load-service")
+
+    - name: "Formation: rs-load-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "rs-load-service-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/rs-load-service.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+          AccessKey: "{{aws_access_key}}"
+          SecretKey: "{{aws_secret_key}}"
+          ECSHostGroupString: "{{ stack_iglu_access_sg.stack_outputs.ECSHostSecurityGroup }}"
+          ECSHostVPC: "{{ vpc_data.stack_outputs.Subnet2 }}"
+      when: targets is search("all") or targets is search("rs-load-service")

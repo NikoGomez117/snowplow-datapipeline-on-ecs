@@ -1,0 +1,507 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: bad elasticsearch service in ECS
+
+Parameters:
+
+  ProductionEnvironment:
+    Type: String
+
+Conditions:
+  CreateProdResources: !Equals [ !Ref ProductionEnvironment, prod ]
+
+Mappings:
+
+  AWSRegionToAMI:
+    us-east-2:
+      AMI: ami-09a64272e7fe706b6
+    us-east-1:
+      AMI: ami-0b9a214f40c38d5eb
+    us-west-2:
+      AMI: ami-00430184c7bb49914
+    us-west-1:
+      AMI: ami-0e7dd5fe55b87a5fe
+
+Resources:
+
+  ElasticSearchCluster:
+    Type: AWS::Elasticsearch::Domain
+    Properties:
+      AccessPolicies: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": [
+                  "*"
+                ]
+              },
+              "Action": [
+                "es:*"
+              ],
+              "Resource": "YOUR_ES_RESOURCE/*"
+            }
+          ]
+        }
+      DomainName: !Sub 'pipeline-es-${AWS::Region}-${ProductionEnvironment}'
+      EBSOptions:
+        EBSEnabled: true
+        VolumeSize: 64
+        VolumeType: gp2
+      ElasticsearchClusterConfig:
+        InstanceCount: 1
+        InstanceType: m4.large.elasticsearch
+      ElasticsearchVersion: 6.4
+      VPCOptions:
+        SecurityGroupIds:
+          - !Ref ESSG
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub 'Subnet1-${AWS::Region}-${ProductionEnvironment}'
+
+  NGINXInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              nginx: []
+          files:
+            "/tmp/nginx/default.conf":
+              content: !Sub |
+                # For more information on configuration, see:
+                #   * Official English Documentation: http://nginx.org/en/docs/
+                #   * Official Russian Documentation: http://nginx.org/ru/docs/
+
+                user nginx;
+                worker_processes auto;
+                error_log /var/log/nginx/error.log;
+                pid /var/run/nginx.pid;
+
+                # Load dynamic modules. See /usr/share/doc/nginx/README.dynamic.
+                include /usr/share/nginx/modules/*.conf;
+
+                events {
+                    worker_connections 1024;
+                }
+
+                http {
+                    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                                      '$status $body_bytes_sent "$http_referer" '
+                                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+                    access_log  /var/log/nginx/access.log  main;
+
+                    sendfile            on;
+                    tcp_nopush          on;
+                    tcp_nodelay         on;
+                    keepalive_timeout   65;
+                    types_hash_max_size 2048;
+
+                    include             /etc/nginx/mime.types;
+                    default_type        application/octet-stream;
+
+                    # Load modular configuration files from the /etc/nginx/conf.d directory.
+                    # See http://nginx.org/en/docs/ngx_core_module.html#include
+                    # for more information
+                    # include /etc/nginx/conf.d/*.conf;
+
+                    index   index.html index.htm;
+
+                    server {
+                        listen       80 default_server;
+                        listen       [::]:80 default_server;
+                        server_name  localhost;
+                        root         /usr/share/nginx/html;
+
+                        # Load configuration files for the default server block.
+                        # include /etc/nginx/default.d/*.conf;
+
+                        location / {
+                          rewrite ^/(.*) /$1 break;
+                          proxy_ignore_client_abort on;
+                          proxy_pass https://YOUR_ES_ENDPOINT;
+                          proxy_set_header  X-Real-IP  $remote_addr;
+                          proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;
+                          proxy_set_header  Host $http_host;
+                        }
+
+                        location /_plugin/kibana/ {
+                                rewrite ^/(.*) /$1 break;
+                                proxy_ignore_client_abort on;
+                          proxy_pass https://YOUR_ES_ENDPOINT;
+                          proxy_set_header  X-Real-IP  $remote_addr;
+                          proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;
+                          proxy_set_header  Host $http_host;
+                        }
+
+                        # redirect server error pages to the static page /40x.html
+                        #
+                        error_page 404 /404.html;
+                            location = /40x.html {
+                        }
+
+                        # redirect server error pages to the static page /50x.html
+                        #
+                        error_page 500 502 503 504 /50x.html;
+                            location = /50x.html {
+                        }
+
+                        # proxy the PHP scripts to Apache listening on 127.0.0.1:80
+                        #
+                        #location ~ \.php$ {
+                        #    proxy_pass   http://127.0.0.1;
+                        #}
+
+                        # pass the PHP scripts to FastCGI server listening on 127.0.0.1:9000
+                        #
+                        #location ~ \.php$ {
+                        #    root           html;
+                        #    fastcgi_pass   127.0.0.1:9000;
+                        #    fastcgi_index  index.php;
+                        #    fastcgi_param  SCRIPT_FILENAME  /scripts$fastcgi_script_name;
+                        #    include        fastcgi_params;
+                        #}
+
+                        # deny access to .htaccess files, if Apache's document root
+                        # concurs with nginx's one
+                        #
+                        #location ~ /\.ht {
+                        #    deny  all;
+                        #}
+                    }
+                #
+                #    server {
+                #        listen       443 ssl http2 default_server;
+                #        listen       [::]:443 ssl http2 default_server;
+                #        server_name  _;
+                #        root         /usr/share/nginx/html;
+                #
+                #        ssl_certificate "/etc/pki/nginx/server.crt";
+                #        ssl_certificate_key "/etc/pki/nginx/private/server.key";
+                #        # It is *strongly* recommended to generate unique DH parameters
+                #        # Generate them with: openssl dhparam -out /etc/pki/nginx/dhparams.pem 2048
+                #        #ssl_dhparam "/etc/pki/nginx/dhparams.pem";
+                #        ssl_session_cache shared:SSL:1m;
+                #        ssl_session_timeout  10m;
+                #        ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+                #        ssl_ciphers HIGH:SEED:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!RSAPSK:!aDH:!aECDH:!EDH-DSS-DES-CBC3-SHA:!KRB5-DES-CBC3-SHA:!SRP;
+                #        ssl_prefer_server_ciphers on;
+                #
+                #        # Load configuration files for the default server block.
+                #        include /etc/nginx/default.d/*.conf;
+                #
+                #        location / {
+                #        }
+                #
+                #        error_page 404 /404.html;
+                #            location = /40x.html {
+                #        }
+                #
+                #        error_page 500 502 503 504 /50x.html;
+                #            location = /50x.html {
+                #        }
+                #    }
+
+                }
+          services:
+            sysvinit:
+              nginx:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - "/etc/nginx/conf.d/default.conf"
+    Properties:
+      InstanceType: t2.medium
+      ImageId: !FindInMap [AWSRegionToAMI, !Ref "AWS::Region", AMI]
+      KeyName: YOUR_KEY_NAME
+      SubnetId:
+        Fn::ImportValue:
+          !Sub 'Subnet1-${AWS::Region}-${ProductionEnvironment}'
+      IamInstanceProfile: !Ref NGINXInstanceProfile
+      SecurityGroupIds:
+        - !Ref NGINXInstanceSG
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          sudo yum update -y
+          sudo yum install -y aws-cfn-bootstrap cloud-init aws-cli
+          sudo /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --region ${AWS::Region} --resource NGINXInstance
+          sudo cp /tmp/nginx/default.conf /etc/nginx/nginx.conf
+          sudo service nginx restart
+
+  NGINXInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref FullPermESRole
+
+  FullPermESRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: |
+        {
+          "Statement": [{
+            "Action": "sts:AssumeRole",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "ec2.amazonaws.com"
+            }
+          }]
+        }
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonESFullAccess"
+      Path: /
+
+  IPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref NGINXInstance
+      EIP: YOUR_ELASTIC_IP
+
+  ESSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: For the elastic search cluster and kibana
+      VpcId:
+        Fn::ImportValue:
+          !Sub 'VPC-${AWS::Region}-${ProductionEnvironment}'
+      SecurityGroupIngress:
+        # From Proxy
+        - IpProtocol: -1
+          CidrIp: "0.0.0.0/0"
+
+  NGINXInstanceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: For the NGINX reverse proxy too kibana
+      VpcId:
+        Fn::ImportValue:
+          !Sub 'VPC-${AWS::Region}-${ProductionEnvironment}'
+      SecurityGroupIngress:
+        # From Office IP
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: "YOUR_OFFICE_IP/32"
+        # From Manager
+        - IpProtocol: "tcp"
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "YOUR_MANAGERS_IP/32"
+        # From ECS SG
+        - SourceSecurityGroupId:
+            Fn::ImportValue:
+              !Sub 'ECSHostSecurityGroup-${AWS::Region}-${ProductionEnvironment}'
+          IpProtocol: -1
+
+  BadESASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue:
+            !Sub 'Subnet1-${AWS::Region}-${ProductionEnvironment}'
+        - Fn::ImportValue:
+            !Sub 'Subnet2-${AWS::Region}-${ProductionEnvironment}'
+      LaunchConfigurationName: !Ref BadESLaunchConfiguration
+      MinSize: 1
+      MaxSize: 4
+      DesiredCapacity: 1
+    CreationPolicy:
+      AutoScalingCreationPolicy:
+        MinSuccessfulInstancesPercent: 0
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT15M
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+        WaitOnResourceSignals: true
+
+  ASGPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref BadESASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateProdResources
+    Properties:
+      AlarmDescription: Scale-up if CPU is greater than 60%
+      AlarmActions:
+        - !Sub YOUR_SNS_ARN
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '60'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref BadESASG
+
+  BadESLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !FindInMap [AWSRegionToAMI, !Ref "AWS::Region", AMI]
+      InstanceType: c4.large
+      KeyName: YOUR_KEY_NAME
+      SecurityGroups:
+        - Fn::ImportValue:
+            !Sub 'ECSHostSecurityGroup-${AWS::Region}-${ProductionEnvironment}'
+      IamInstanceProfile:
+        Fn::ImportValue: 
+          !Sub 'ECSInstanceProfile-${AWS::Region}-${ProductionEnvironment}'
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash
+          yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+          yum install -y aws-cfn-bootstrap hibagent
+          /opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource BadESLaunchConfiguration
+          /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource BadESASG
+          /usr/bin/enable-ec2-spot-hibernation
+
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              awslogs: []
+
+          commands:
+            01_add_instance_to_cluster:
+              command:
+                Fn::Join:
+                  - ''
+                  - 
+                    - 'echo ECS_CLUSTER='
+                    - Fn::ImportValue:
+                       !Sub 'ECSCluster-${AWS::Region}-${ProductionEnvironment}'
+                    - ' >> /etc/ecs/ecs.config'
+          files:
+            "/etc/cfn/cfn-hup.conf":
+              mode: 000400
+              owner: root
+              group: root
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+            "/etc/cfn/hooks.d/cfn-auto-reloader.conf":
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.BadESLaunchConfiguration.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource BadESLaunchConfiguration
+            "/etc/awslogs/awscli.conf":
+              content: !Sub |
+                [plugins]
+                cwlogs = cwlogs
+                [default]
+                region = ${AWS::Region}
+            "/etc/awslogs/awslogs.conf":
+              content: !Sub |
+                [general]
+                state_file = /var/lib/awslogs/agent-state
+                [/var/log/dmesg]
+                file = /var/log/dmesg
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/dmesg
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                [/var/log/messages]
+                file = /var/log/messages
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/messages
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %b %d %H:%M:%S
+                [/var/log/docker]
+                file = /var/log/docker
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/docker
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%S.%f
+                [/var/log/ecs/ecs-init.log]
+                file = /var/log/ecs/ecs-init.log.*
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/ecs/ecs-init.log
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+                [/var/log/ecs/ecs-agent.log]
+                file = /var/log/ecs/ecs-agent.log.*
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/ecs/ecs-agent.log
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+                [/var/log/ecs/audit.log]
+                file = /var/log/ecs/audit.log.*
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/ecs/audit.log
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+              awslogs:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - /etc/awslogs/awslogs.conf
+                  - /etc/awslogs/awscli.conf
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub 'bad-es-service-${AWS::Region}-${ProductionEnvironment}'
+      Cluster:
+        Fn::ImportValue:
+          !Sub 'ECSCluster-${AWS::Region}-${ProductionEnvironment}'
+      # Role: !Ref ServiceRole
+      DesiredCount: 1
+      TaskDefinition: !Ref BadESTask
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+
+  BadESTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: !Sub 'bad-es-container-${AWS::Region}-${ProductionEnvironment}'
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: PRODUCTION_ENV
+              Value: !Ref ProductionEnvironment
+          Essential: true
+          Image: !Sub YOUR_ECR_IMAGE_FOR_BAD_ES:latest
+          Memory: 2560
+          PortMappings:
+            - ContainerPort: 8080
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub 'bad-es-task-${AWS::Region}-${ProductionEnvironment}'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub 'bad-es-logs-${AWS::Region}-${ProductionEnvironment}'
+
+Outputs:
+
+  BadESService:
+    Value: !Ref Service
+    Export:
+      Name: !Sub 'BadESService-${AWS::Region}-${ProductionEnvironment}'

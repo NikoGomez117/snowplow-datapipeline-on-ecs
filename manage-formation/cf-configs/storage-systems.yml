@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Kinesis streams and S3 Buckets for the pipeline!
+
+Parameters:
+
+  ProductionEnvironment:
+    Type: String
+
+Conditions:
+  CreateProdResource: !Equals [ !Ref ProductionEnvironment, prod ]
+
+
+Resources:
+
+  StreamToEnricher:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-collector-to-enricher'
+      RetentionPeriodHours: 24
+      ShardCount: 2
+
+  CollectionNotSendingData:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateProdResource
+    Properties:
+      AlarmDescription: Collection Not Sending Data
+      AlarmActions:
+        - !Sub YOUR_SNS_ARN
+      InsufficientDataActions:
+        - !Sub YOUR_SNS_ARN
+      MetricName: IncomingRecords
+      Namespace: AWS/Kinesis
+      Statistic: Sum
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '10'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: StreamName
+          Value: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-collector-to-enricher'
+
+  EnrichmentNotRecievingData:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateProdResource
+    Properties:
+      AlarmDescription: Enrichment Not Recieving Data
+      AlarmActions:
+        - !Sub YOUR_SNS_ARN
+      MetricName: GetRecords.Records
+      Namespace: AWS/Kinesis
+      Statistic: Sum
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '10'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: StreamName
+          Value: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-collector-to-enricher'
+
+  StreamToS3:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-enricher-to-s3'
+      RetentionPeriodHours: 24
+      ShardCount: 2
+
+  EnrichmentNotSendingData:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateProdResource
+    Properties:
+      AlarmDescription: Enrichment Not Sending Data
+      AlarmActions:
+        - !Sub YOUR_SNS_ARN
+      InsufficientDataActions:
+        - !Sub YOUR_SNS_ARN
+      MetricName: IncomingRecords
+      Namespace: AWS/Kinesis
+      Statistic: Sum
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '10'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: StreamName
+          Value: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-enricher-to-s3'
+
+  S3LoaderNotRecievingData:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateProdResource
+    Properties:
+      AlarmDescription: S3Loader Not Recieving Data
+      AlarmActions:
+        - !Sub YOUR_SNS_ARN
+      MetricName: GetRecords.Records
+      Namespace: AWS/Kinesis
+      Statistic: Sum
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '10'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: StreamName
+          Value: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-enricher-to-s3'
+
+  StreamToBadS3:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-bad-data-to-s3'
+      RetentionPeriodHours: 24
+      ShardCount: 1
+
+  StreamFromBadES:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-bad-es-data'
+      RetentionPeriodHours: 24
+      ShardCount: 1
+
+  GoodS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub 'pipeline-${AWS::Region}-${ProductionEnvironment}-good'
+
+  BadS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub 'pipeline-${AWS::Region}-${ProductionEnvironment}-bad'
+
+  BadS3RecoveryBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub 'pipeline-${AWS::Region}-${ProductionEnvironment}-bad-recovered'
+
+  BadS3Firehose:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub 'consume-${AWS::Region}-${ProductionEnvironment}-bad-data'
+      DeliveryStreamType: KinesisStreamAsSource
+      KinesisStreamSourceConfiguration:
+        KinesisStreamARN: !GetAtt 'StreamToBadS3.Arn'
+        RoleARN:
+          Fn::ImportValue:
+            !Sub 'ECSTaskExecutionRole-${AWS::Region}-${ProductionEnvironment}'
+      S3DestinationConfiguration:
+        BucketARN: !GetAtt 'BadS3Bucket.Arn'
+        BufferingHints:
+          IntervalInSeconds: 60
+          SizeInMBs: 5
+        CompressionFormat: UNCOMPRESSED
+        RoleARN:
+          Fn::ImportValue:
+            !Sub 'ECSTaskExecutionRole-${AWS::Region}-${ProductionEnvironment}'
+
+  IgluBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub 'pipeline-${AWS::Region}-${ProductionEnvironment}-iglu'
+
+Outputs:
+
+  StreamToEnricher:
+    Value: !Ref StreamToEnricher
+    Export:
+      Name: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-collector-to-enricher'
+
+  StreamToS3:
+    Value: !Ref StreamToS3
+    Export:
+      Name: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-enricher-to-s3'
+
+  StreamToBadS3:
+    Value: !Ref StreamToBadS3
+    Export:
+      Name: !Sub 'stream-${AWS::Region}-${ProductionEnvironment}-bad-data-to-s3'
+
+  GoodS3Bucket:
+    Value: !Ref GoodS3Bucket
+    Export:
+      Name: !Sub 'GoodS3Bucket-${AWS::Region}-${ProductionEnvironment}-good'
+
+  BadS3Bucket:
+    Value: !Ref BadS3Bucket
+    Export:
+      Name: !Sub 'BadS3Bucket-${AWS::Region}-${ProductionEnvironment}'

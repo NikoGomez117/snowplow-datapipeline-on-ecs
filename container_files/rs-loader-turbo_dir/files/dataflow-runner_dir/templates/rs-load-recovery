@@ -1,0 +1,52 @@
+{
+  "schema": "iglu:com.snowplowanalytics.dataflowrunner/PlaybookConfig/avro/1-0-1",
+  "data": {
+    "region": "{{.region}}",
+    "credentials": {
+      "accessKeyId": "{{.accessKey}}",
+      "secretAccessKey": "{{.secretKey}}"
+    },
+    "steps": [
+      {
+        "type": "CUSTOM_JAR",
+        "name": "S3DistCp Step: Archived events -> reload S3",
+        "actionOnFailure": "CONTINUE",
+        "jar": "/usr/share/aws/emr/s3-dist-cp/lib/s3-dist-cp.jar",
+        "arguments": [
+          "--src","s3n://pipeline-{{.region}}-{{.prodEnv}}-good/archive/shredded/good/",
+          "--dest","s3n://pipeline-{{.region}}-{{.prodEnv}}-good/reload/",
+          "--srcPattern",".*run={{.pattern}}.*"
+        ]
+      },
+      {
+        "type": "CUSTOM_JAR",
+        "name": "rdb load step",
+        "actionOnFailure": "CONTINUE",
+        "jar": "s3://snowplow-hosted-assets/4-storage/rdb-loader/snowplow-rdb-loader-0.14.0.jar",
+        "arguments": [
+          "--config",
+          "{{base64File "/var/lib/jenkins/datapipeline/container_files/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/emr.yml"}}",
+          "--target",
+          "{{base64File "/var/lib/jenkins/datapipeline/container_files/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/targets/redshift.conf"}}",
+          "--resolver",
+          "{{base64File "/var/lib/jenkins/datapipeline/container_files/rs-loader_dir/files/dataflow-runner_dir/configs/resolver.json"}}",
+          "--logkey",
+          "s3n://pipeline-{{.region}}-{{.prodEnv}}-good/log/rdb-loader-{{.timeStamp}}",
+          "--skip",
+          "analyze,consistency_check"
+        ]
+      },
+      {
+        "type": "CUSTOM_JAR",
+        "name": "delete reload step",
+        "actionOnFailure": "CONTINUE",
+        "jar": "command-runner.jar",
+        "arguments": [
+          "/bin/bash", "-c", "hadoop dfs -rmr s3n://pipeline-{{.region}}-{{.prodEnv}}-good/reload/"
+        ]
+      }
+    ],
+    "tags": [
+    ]
+  }
+}

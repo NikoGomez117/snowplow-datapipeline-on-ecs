@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Configuration of the internet facing endpoints and security groups
+
+Parameters:
+
+  ProductionEnvironment:
+    Type: String
+
+Conditions:
+  CreateProdResource:
+    !Equals [!Ref ProductionEnvironment, prod]
+
+Resources:
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'data-lb-${AWS::Region}-${ProductionEnvironment}'
+      Subnets:
+        - Fn::ImportValue:
+            !Sub 'Subnet1-${AWS::Region}-${ProductionEnvironment}'
+        - Fn::ImportValue:
+            !Sub 'Subnet2-${AWS::Region}-${ProductionEnvironment}'
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+
+  NoDataOnELB:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateProdResource
+    Properties:
+      AlarmDescription: ELB is not being sent data
+      AlarmActions:
+        - !Sub YOUR_SNS_ARN
+      MetricName: RequestCount
+      Namespace: AWS/ApplicationELB
+      Statistic: Sum
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '1'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt CollectionTargetGroup.TargetGroupFullName
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref HTTPSCert
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref CollectionTargetGroup
+
+  LoadBalancerListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref CollectionTargetGroup
+
+  HTTPSCert:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !If [CreateProdResource, YOUR_PROD_ENDPOINT, YOUR_DEV_ENDPOINT]
+      ValidationMethod: DNS
+      DomainValidationOptions:
+      - DomainName: !If [CreateProdResource, YOUR_PROD_ENDPOINT, YOUR_DEV_ENDPOINT]
+        ValidationDomain: !If [CreateProdResource, YOUR_PROD_ENDPOINT, YOUR_DEV_ENDPOINT]
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for loadbalancer to services on ECS
+      VpcId:
+        Fn::ImportValue:
+          !Sub 'VPC-${AWS::Region}-${ProductionEnvironment}'
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+
+  DomainRecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        EvaluateTargetHealth: false
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+      HostedZoneId:
+        !If [CreateProdResource, YOUR_PROD_HOSTEDZONE_ID, YOUR_DEV_HOSTEDZONE_ID]
+      Name:
+        !If [CreateProdResource, YOUR_PROD_ENDPOINT, YOUR_DEV_ENDPOINT]
+      Type: A
+
+  ECSHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'host-sg-${AWS::Region}-${ProductionEnvironment}'
+      VpcId:
+        Fn::ImportValue:
+          !Sub 'VPC-${AWS::Region}-${ProductionEnvironment}'
+      GroupDescription: Access to the ECS hosts and the tasks/containers that run on them
+      SecurityGroupIngress:
+        # Only allow inbound access to ECS from the ELB
+        - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          IpProtocol: -1
+        # Only lets manager ip ssh into the instance host
+        - IpProtocol: "tcp"
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "YOUR_MANAGERS_IP/32"
+      Tags:
+        - Key: Name
+          Value: Pipeline-ECS-Hosts
+
+  DefaultTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'data-tg-${AWS::Region}-${ProductionEnvironment}'
+      VpcId:
+        Fn::ImportValue:
+          !Sub 'VPC-${AWS::Region}-${ProductionEnvironment}'
+      Port: 80
+      Protocol: HTTP
+
+  CollectionTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 10
+      Protocol: 'HTTP'
+      HealthCheckPath: /health
+      VpcId:
+        Fn::ImportValue:
+          !Sub 'VPC-${AWS::Region}-${ProductionEnvironment}'
+
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref LoadBalancerListener
+      Priority: 2
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - /collect
+      Actions:
+        - TargetGroupArn: !Ref CollectionTargetGroup
+          Type: forward
+
+  CloudWatchCollectionLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub 'collection-task-${AWS::Region}-${ProductionEnvironment}'
+      RetentionInDays: 1
+  
+  CloudWatchEnrichmentLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub 'enrichment-task-${AWS::Region}-${ProductionEnvironment}'
+      RetentionInDays: 1
+
+  CloudWatchBadESLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub 'bad-es-task-${AWS::Region}-${ProductionEnvironment}'
+      RetentionInDays: 1
+  
+  CloudWatchS3LoadLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub 's3load-task-${AWS::Region}-${ProductionEnvironment}'
+      RetentionInDays: 1
+  
+  CloudWatchRSLoadLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub 'rs-load-task-${AWS::Region}-${ProductionEnvironment}'
+      RetentionInDays: 1
+
+Outputs:
+
+  Listener:
+    Description: listener port 443
+    Value: !Ref LoadBalancerListener
+    Export:
+      Name: !Sub 'Listener-${AWS::Region}-${ProductionEnvironment}'
+
+  ECSHostSecurityGroup:
+    Description: A reference to the security group for ECS hosts
+    Value: !Ref ECSHostSecurityGroup
+    Export:
+      Name: !Sub 'ECSHostSecurityGroup-${AWS::Region}-${ProductionEnvironment}'
+
+  DefaultTargetGroup:
+    Description: target group for data from the elb
+    Value: !Ref DefaultTargetGroup
+    Export:
+      Name: !Sub 'DefaultTargetGroup-${AWS::Region}-${ProductionEnvironment}'
+
+  CollectionTargetGroup:
+    Description: target group for data from the elb
+    Value: !Ref CollectionTargetGroup
+    Export:
+      Name: !Sub 'CollectionTargetGroup-${AWS::Region}-${ProductionEnvironment}'
+
+  AWSEndpoint:
+    Description: Pipeline Endpoint
+    Value: !Join ['', ['http://', !GetAtt LoadBalancer.DNSName, '']]
+    Export:
+      Name: !Sub 'PipelineEndpoint-${AWS::Region}-${ProductionEnvironment}'

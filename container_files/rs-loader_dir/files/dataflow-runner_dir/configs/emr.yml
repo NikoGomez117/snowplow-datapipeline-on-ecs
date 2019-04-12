@@ -1,0 +1,76 @@
+aws:
+  # Credentials can be hardcoded or set in environment variables
+  access_key_id: ${AWS_ACCESS_KEY_ID} # <%= ENV['AWS_ACCESS_KEY_ID'] %>
+  secret_access_key: ${AWS_SECRET_ACCESS_KEY} # <%= ENV['AWS_SECRET_ACCESS_KEY'] %>
+  s3:
+    region: AWS_REGION
+    buckets:
+      assets: s3://snowplow-hosted-assets # DO NOT CHANGE unless you are hosting the jarfiles etc yourself in your own bucket
+      jsonpath_assets: s3://pipeline-AWS_REGION-PRODUCTION_ENV-iglu
+      log: s3://pipeline-AWS_REGION-PRODUCTION_ENV-good/log/emr
+      encrypted: false # Whether the buckets below are enrcrypted using server side encryption (SSE-S3)
+      enriched:
+        good: s3://pipeline-AWS_REGION-PRODUCTION_ENV-good/staging
+        archive: s3://pipeline-AWS_REGION-PRODUCTION_ENV-good/archive
+        stream: s3://pipeline-AWS_REGION-PRODUCTION_ENV-good/staging
+      shredded:
+        good: s3://pipeline-AWS_REGION-PRODUCTION_ENV-good/shredded/good
+        bad: s3://pipeline-AWS_REGION-PRODUCTION_ENV-good/shredded/bad
+        errors: 
+        archive: s3://pipeline-AWS_REGION-PRODUCTION_ENV-good/archive/shredded
+  emr:
+    ami_version: 5.9.0
+    region: AWS_REGION        # Always set this
+    jobflow_role: EMR_EC2_DefaultRole # Created using $ aws emr create-default-roles
+    service_role: EMR_DefaultRole     # Created using $ aws emr create-default-roles
+    placement: AWS_REGIONa # Set this if not running in VPC. Leave blank otherwise
+    ec2_subnet_id: # Set this if running in VPC. Leave blank otherwise
+    ec2_key_name: YOUR_KEY_NAME
+    security_configuration: 
+    bootstrap: []           # Set this to specify custom boostrap actions. Leave empty otherwise
+    software:
+      hbase:                # Optional. To launch on cluster, provide version, "0.92.0", keep quotes. Leave empty otherwise.
+      lingual:              # Optional. To launch on cluster, provide version, "1.1", keep quotes. Leave empty otherwise.
+    # Adjust your Hadoop cluster below
+    jobflow:
+      job_name: Snowplow ETL # Give your job a name
+      master_instance_type: m1.large
+      core_instance_count: 8
+      core_instance_type: m1.large
+      core_instance_ebs:    # Optional. Attach an EBS volume to each core instance.
+        volume_size: 100    # Gigabytes
+        volume_type: "gp2"
+        volume_iops: 400    # Optional. Will only be used if volume_type is "io1"
+        ebs_optimized: false # Optional. Will default to true
+      task_instance_count: 0 # Increase to use spot instances
+      task_instance_type: m1.large
+      task_instance_bid: 0.015 # In USD. Adjust bid, or leave blank for non-spot-priced (i.e. on-demand) task instances
+    bootstrap_failure_tries: 3 # Number of times to attempt the job in the event of bootstrap failures
+    configuration:
+      yarn-site:
+        yarn.resourcemanager.am.max-attempts: "1"
+      spark:
+        maximizeResourceAllocation: "true"
+    additional_info:        # Optional JSON string for selecting additional features
+collectors:
+  format: 'thrift' # For example: 'clj-tomcat' for the Clojure Collector, 'thrift' for Thrift records, 'tsv/com.amazon.aws.cloudfront/wd_access_log' for Cloudfront access logs or 'ndjson/urbanairship.connect/v1' for UrbanAirship Connect events
+enrich:
+  versions:
+    spark_enrich: 1.16.0 # Version of the Spark Enrichment process
+  continue_on_unexpected_error: false # Set to 'true' (and set :out_errors: above) if you don't want any exceptions thrown from ETL
+  output_compression: NONE # Compression only supported with Redshift, set to NONE if you have Postgres targets. Allowed formats: NONE, GZIP
+storage:
+  versions:
+    rdb_loader: 0.14.0
+    rdb_shredder: 0.13.1        # Version of the Spark Shredding process
+    hadoop_elasticsearch: 0.1.0 # Version of the Hadoop to Elasticsearch copying process
+monitoring:
+  tags: {} # Name-value pairs describing this job
+  logging:
+    level: DEBUG # You can optionally switch to INFO for production
+  snowplow:
+    method: get
+    protocol: http
+    port: 80
+    app_id: pipeline # e.g. snowplow
+    collector: 127.0.0.1

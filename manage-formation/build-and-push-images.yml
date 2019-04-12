@@ -1,0 +1,172 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+  vars:
+    - container_path: ../container_files
+
+  tasks:
+
+      # Collection
+    - name: building collection-service image
+      command: >
+        sudo docker build -t 
+        collector-repo-{{ aws_region }}-{{ production_env }} 
+        {{ container_path }}/collector_dir/
+      when: targets is search("all") or targets is search("collection-service")
+
+    - name: tagging collection-service image
+      command: >
+        sudo docker tag
+        collector-repo-{{ aws_region }}-{{ production_env }}:latest
+        YOUR_ECR_IMAGE_FOR_COLLECTION:latest
+      when: targets is search("all") or targets is search("collection-service")
+
+    - name: pushing collection-service image
+      command: >
+        sudo docker push
+        YOUR_ECR_IMAGE_FOR_COLLECTION:latest
+      when: targets is search("all") or targets is search("collection-service")
+
+      # Enrichment
+    - name: building enrichment-service image
+      command: >
+        sudo docker build -t
+        enricher-repo-{{ aws_region }}-{{ production_env }} 
+        {{ container_path }}/enricher_dir/
+      when: targets is search("all") or targets is search("enrichment-service")
+
+    - name: tagging enrichment-service image
+      command: >
+        sudo docker tag
+        enricher-repo-{{ aws_region }}-{{ production_env }}:latest
+        YOUR_ECR_IMAGE_FOR_ENRICHMENT:latest
+      when: targets is search("all") or targets is search("enrichment-service")
+
+    - name: pushing enrichment-service image
+      command: >
+        sudo docker push
+        YOUR_ECR_IMAGE_FOR_ENRICHMENT:latest
+      when: targets is search("all") or targets is search("enrichment-service")
+
+      # Bad ES
+    - name: building bad-es-service image
+      command: >
+        sudo docker build -t
+        bad-es-repo-{{ aws_region }}-{{ production_env }} 
+        {{ container_path }}/bad-es_dir/
+      when: targets is search("all") or targets is search("bad-es-service")
+
+    - name: tagging bad-es-service image
+      command: >
+        sudo docker tag
+        bad-es-repo-{{ aws_region }}-{{ production_env }}:latest
+        YOUR_ECR_IMAGE_FOR_BAD_ES:latest
+      when: targets is search("all") or targets is search("bad-es-service")
+
+    - name: pushing bad-es-service image
+      command: >
+        sudo docker push
+        YOUR_ECR_IMAGE_FOR_BAD_ES:latest
+      when: targets is search("all") or targets is search("bad-es-service")
+
+      # S3 Laod
+    - name: building s3load-service image
+      command: >
+        sudo docker build -t 
+        s3loader-repo-{{ aws_region }}-{{ production_env }} 
+        {{ container_path }}/s3loader_dir/
+      when: targets is search("all") or targets is search("s3load-service")
+
+    - name: tagging s3load-service image
+      command: >
+        sudo docker tag
+        s3loader-repo-{{ aws_region }}-{{ production_env }}:latest
+        YOUR_ECR_IMAGE_FOR_S3_LOADS:latest
+      when: targets is search("all") or targets is search("s3load-service")
+
+    - name: pushing s3load-service image
+      command: >
+        sudo docker push
+        YOUR_ECR_IMAGE_FOR_S3_LOADS:latest
+      when: targets is search("all") or targets is search("s3load-service")
+
+    #Additional presteps to provision emr yml....
+    - name: provisioning emr.yml aws_region
+      replace:
+        path: '{{ container_path }}/rs-loader_dir/files/dataflow-runner_dir/configs/emr.yml'
+        regexp: AWS_REGION
+        replace: '{{ aws_region }}'
+      when: targets is search("all") or targets is search("rs-load-service")
+
+    - name: provisioning emr.yml prod_env
+      replace:
+        path: '{{ container_path }}/rs-loader_dir/files/dataflow-runner_dir/configs/emr.yml'
+        regexp: PRODUCTION_ENV
+        replace: '{{ production_env }}'
+      when: targets is search("all") or targets is search("rs-load-service")
+
+    - name: provisioning rs target with db password
+      replace:
+        path: '{{ container_path }}/rs-loader_dir/files/dataflow-runner_dir/configs/targets/redshift.conf'
+        regexp: RS_PASSWORD
+        replace: '{{ rs_password }}'
+      when: targets is search("all") or targets is search("rs-load-service")
+
+      # RS Load
+    - name: building rs-load-service image
+      command: >
+        sudo docker build -t 
+        rs-loader-repo-{{ aws_region }}-{{ production_env }} 
+        {{ container_path }}/rs-loader_dir/
+      when: targets is search("all") or targets is search("rs-load-service")
+
+    - name: tagging rs-load-service image
+      command: >
+        sudo docker tag
+        rs-loader-repo-{{ aws_region }}-{{ production_env }}:latest
+        YOUR_ECR_IMAGE_FOR_RS_LOADING:latest
+      when: targets is search("all") or targets is search("rs-load-service")
+
+    - name: pushing rs-load-service image
+      command: >
+        sudo docker push
+        YOUR_ECR_IMAGE_FOR_RS_LOADING:latest
+      when: targets is search("all") or targets is search("rs-load-service")
+
+      # Iglu Repo
+    - name: Lint check schemas
+      command: >
+        java -jar 
+        ../container_files/iglu-repo_dir/igluctl-0.3.0.jar
+        lint
+        ../container_files/iglu-repo_dir/schemas
+      when: targets is search("all") or targets is search("iglu-repo")
+
+    - name: execute local test suite
+      command: chdir=../local_test_suite/ sudo python testrunner.py
+      register: test_result
+      failed_when: "'FAILED' in test_result.stderr"
+      when: targets is search("all") or targets is search("iglu-repo")
+
+    - name: building iglu-repo image
+      command: >
+        sudo docker build -t 
+        iglu-repo-repo-{{ aws_region }}-{{ production_env }} 
+        {{ container_path }}/iglu-repo_dir/
+      when: targets is search("all") or targets is search("iglu-repo")
+
+    - name: tagging iglu-repo image
+      command: >
+        sudo docker tag
+        iglu-repo-repo-{{ aws_region }}-{{ production_env }}:latest
+        YOUR_ECR_IMAGE_FOR_IGLU_REPO:latest
+      when: targets is search("all") or targets is search("iglu-repo")
+
+    - name: pushing iglu-repo image
+      command: >
+        sudo docker push
+        YOUR_ECR_IMAGE_FOR_IGLU_REPO:latest
+      when: targets is search("all") or targets is search("iglu-repo")

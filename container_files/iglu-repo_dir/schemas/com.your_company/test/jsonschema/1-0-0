@@ -1,0 +1,18 @@
+{
+	"$schema" : "http://iglucentral.com/schemas/com.snowplowanalytics.self-desc/schema/jsonschema/1-0-0#",
+	"description": "tier test stats schema",
+	"self": {
+		"vendor": "com.your_company",
+		"name": "test",
+		"format": "jsonschema",
+		"version": "1-0-0"
+	},
+	"type": "object",
+	"properties": {
+		"eventId" : {
+			"type": "string"
+		}
+	},
+	"required": ["eventId"],
+	"additionalProperties": false
+}

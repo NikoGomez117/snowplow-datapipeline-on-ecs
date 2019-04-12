@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Redshift scheduled loading service in the ECS
+
+Parameters:
+
+  ProductionEnvironment:
+    Type: String
+
+  AccessKey:
+    Type: String
+
+  SecretKey:
+    Type: String
+
+  ECSHostGroupString:
+    Type: String
+
+  ECSHostVPC:
+    Type: String
+
+Conditions:
+  CreateProdResource: !Equals [ !Ref ProductionEnvironment, prod ]
+
+Mappings:
+
+  AWSRegionToAMI:
+    us-east-2:
+      AMI: ami-09a64272e7fe706b6
+    us-east-1:
+      AMI: ami-0b9a214f40c38d5eb
+    us-west-2:
+      AMI: ami-00430184c7bb49914
+    us-west-1:
+      AMI: ami-0e7dd5fe55b87a5fe
+
+Resources:
+
+  EMRCluster:
+    Type: AWS::EMR::Cluster
+    Properties:
+      Configurations:
+        - Classification: hadoop-env
+          Configurations:
+          - Classification: export
+            ConfigurationProperties:
+              AWS_REGION: !Ref AWS::Region
+              PRODUCTION_ENV: !Ref ProductionEnvironment
+              HADOOP_HEAPSIZE: 4072
+        - Classification: spark-env
+          Configurations:
+          - Classification: export
+            ConfigurationProperties:
+              AWS_REGION: !Ref AWS::Region
+              PRODUCTION_ENV: !Ref ProductionEnvironment
+      Instances:
+        MasterInstanceGroup:
+          InstanceCount: 1
+          InstanceType: "m5.xlarge"
+          Market: "ON_DEMAND"
+          Name: "Master"
+        CoreInstanceGroup:
+          InstanceCount: 1
+          InstanceType: "r5.2xlarge"
+          Market: "ON_DEMAND"
+          Name: "Core"
+          EbsConfiguration:
+            EbsBlockDeviceConfigs:
+              - VolumeSpecification:
+                  SizeInGB: 128
+                  VolumeType: gp2
+            EbsOptimized: true
+        EmrManagedMasterSecurityGroup: !Ref ECSHostGroupString
+        EmrManagedSlaveSecurityGroup: !Ref ECSHostGroupString
+        Ec2SubnetId: !Ref ECSHostVPC
+      Name: !Sub 'Pipeline-EMR-${AWS::Region}-${ProductionEnvironment}'
+      JobFlowRole: "EMR_EC2_DefaultRole"
+      ServiceRole: "EMR_DefaultRole"
+      ReleaseLabel: "emr-5.17.0"
+      LogUri: !Sub 's3://pipeline-${AWS::Region}-${ProductionEnvironment}-good/log/elasticmapreduce'
+      Applications:
+        - Name: Hive
+        - Name: Pig
+        - Name: Hue
+        - Name: Spark
+        - Name: Hadoop
+
+  EMREventFailureRule:
+    Type: AWS::Events::Rule
+    Condition: CreateProdResource
+    Properties:
+      Description: Trigger to send alarm for emr failures
+      EventPattern: |
+        {
+          "source": [
+            "aws.emr"
+          ],
+          "detail-type": [
+            "EMR Step Status Change"
+          ],
+          "detail": {
+            "state": [
+              "FAILED"
+            ]
+          }
+        }
+      Name: EMREventFailureRule
+      Targets:
+        - Arn: !Sub YOUR_SNS_ALARM
+          Id: !Sub 'target-1-${AWS::Region}-${ProductionEnvironment}'
+
+  ServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'rs-load-role-${AWS::StackName}'
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": { "Service": [ "events.amazonaws.com" ]},
+            "Action": [ "sts:AssumeRole" ]
+          }]
+        }
+      Policies:
+        - PolicyName: !Sub 'rs-load-role-${AWS::StackName}'
+          PolicyDocument:
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Action": [
+                  "ecs:RunTask",
+                  "logs:*",
+                  "ec2:AuthorizeSecurityGroupIngress",
+                  "ec2:Describe*",
+                  "iam:ListInstanceProfiles",
+                  "iam:ListRoles",
+                  "iam:PassRole"
+                ],
+                "Resource": "*"
+              }]
+            }
+
+  RSLoadScheduler:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: 'Loads Data from S3 into Redshift Periodically'
+      Name: !Sub 'rs-loader-scheduler-${AWS::Region}-${ProductionEnvironment}'
+      ScheduleExpression: rate(10 minutes)
+      State: ENABLED
+      Targets:
+        - Id: 'scheduled-rs-load-task'
+          RoleArn: !GetAtt ServiceRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref RSLoadTask
+            TaskCount: 1
+          Arn:
+            Fn::ImportValue: !Sub 'ECSCluster-${AWS::Region}-${ProductionEnvironment}-arn'
+
+  RSLoadTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: !Sub 'rs-loader-container-${AWS::Region}-${ProductionEnvironment}'
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: PRODUCTION_ENV
+              Value: !Ref ProductionEnvironment
+            - Name: EMR_ID
+              Value: !Ref EMRCluster
+            - Name: AWS_ACCESS_KEY_ID
+              Value: !Ref AccessKey
+            - Name: AWS_SECRET_ACCESS_KEY
+              Value: !Ref SecretKey
+          Essential: true
+          Image: !Sub YOUR_ECR_IMAGE_FOR_RS_LOADING:latest
+          Memory: 256
+          PortMappings:
+            - ContainerPort: 8080
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub 'rs-load-task-${AWS::Region}-${ProductionEnvironment}'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub 'rs-load-logs-${AWS::Region}-${ProductionEnvironment}'
+
+Outputs:
+
+  S3LoadScheduler:
+    Value: !Ref RSLoadScheduler
+    Export:
+      Name: !Sub 'RSLoadScheduler-${AWS::Region}-${ProductionEnvironment}'

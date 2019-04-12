@@ -1,0 +1,98 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: iglu repo static website on ec2 instance
+
+Parameters:
+
+  ProductionEnvironment:
+    Type: String
+
+Mappings:
+
+  # These are normal images...
+  AWSRegionToAMI:
+    us-east-2:
+      AMI: ami-0f65671a86f061fcd
+    us-east-1:
+      AMI: ami-0ac019f4fcb7cb7e6
+    us-west-2:
+      AMI: ami-0bbe6b35405ecebdb
+    us-west-1:
+      AMI: ami-063aa838bd7631e0b
+
+Resources:
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.medium
+      ImageId: !FindInMap [AWSRegionToAMI, !Ref "AWS::Region", AMI]
+      KeyName: YOUR_KEY_NAME
+      SubnetId:
+        Fn::ImportValue:
+          !Sub 'Subnet1-${AWS::Region}-${ProductionEnvironment}'
+      IamInstanceProfile:
+        Fn::ImportValue: 
+          !Sub 'ECSInstanceProfile-${AWS::Region}-${ProductionEnvironment}'
+      SecurityGroupIds:
+        - !Ref EC2SG
+      PrivateIpAddress: 10.0.0.25
+      UserData:
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash
+            apt-get update -qq
+            apt-get install -y apt-transport-https ca-certificates
+            apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
+            echo "deb https://apt.dockerproject.org/repo ubuntu-xenial main" | tee /etc/apt/sources.list.d/docker.list
+            apt-get update -qq
+            apt-get purge lxc-docker || true
+            apt-get -y install linux-image-extra-$(uname -r) linux-image-extra-virtual
+            apt-get -y install docker-engine
+            usermod -aG docker ubuntu
+            mkdir -p /etc/systemd/system/docker.service.d
+            printf "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd -H fd:// -H tcp://0.0.0.0:2375\n" >>  /etc/systemd/system/docker.service.d/docker.conf
+            systemctl daemon-reload
+            systemctl restart docker
+            sudo apt install awscli -y
+            sudo apt update
+            $(aws ecr get-login --no-include-email --region ${AWS::Region})
+            docker pull YOUR_ECR_IMAGE_FOR_IGLU_REPO:latest
+            docker run -p 80:8020 YOUR_ECR_IMAGE_FOR_IGLU_REPO
+
+  EC2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: For the iglu repo allowing ssh, http, and docker ports
+      VpcId:
+        Fn::ImportValue:
+          !Sub 'VPC-${AWS::Region}-${ProductionEnvironment}'
+      SecurityGroupIngress:
+        # From ECS hosts
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          SourceSecurityGroupId:
+            Fn::ImportValue:
+              !Sub 'ECSHostSecurityGroup-${AWS::Region}-${ProductionEnvironment}'
+        # From manger
+        - IpProtocol: "tcp"
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "YOUR_MANAGERS_IP/32"
+        # For connecting to Docker
+        - IpProtocol: "tcp"
+          FromPort: 2375
+          ToPort: 2375
+          CidrIp: "YOUR_MANAGERS_IP/32"
+
+Outputs:
+
+  IgluRepoInstance:
+    Value: !Sub EC2Instance
+    Export:
+      Name: !Sub 'IgluRepoInstance-${AWS::Region}-${ProductionEnvironment}'
+
+  IgluRepoIP:
+    Value: !GetAtt EC2Instance.PublicIp
+    Export:
+      Name: !Sub 'IgluRepoIP-${AWS::Region}-${ProductionEnvironment}'

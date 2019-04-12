@@ -1,0 +1,9 @@
+{
+  "schema": "iglu:com.snowplowanalytics.snowplow/recoveries/jsonschema/1-0-0",
+  "data": [
+    {
+      "name": "PassThrough",
+      "error": "All Errors?"
+    }
+  ]
+}

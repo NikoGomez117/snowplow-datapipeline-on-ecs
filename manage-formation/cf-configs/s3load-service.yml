@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: s3load service in ECS
+
+Parameters:
+
+  ProductionEnvironment:
+    Type: String
+
+Conditions:
+  CreateProdResources: !Equals [ !Ref ProductionEnvironment, prod ]
+
+Mappings:
+
+  AWSRegionToAMI:
+    us-east-2:
+      AMI: ami-09a64272e7fe706b6
+    us-east-1:
+      AMI: ami-0b9a214f40c38d5eb
+    us-west-2:
+      AMI: ami-00430184c7bb49914
+    us-west-1:
+      AMI: ami-0e7dd5fe55b87a5fe
+
+Resources:
+
+  S3LoadASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue:
+            !Sub 'Subnet1-${AWS::Region}-${ProductionEnvironment}'
+        - Fn::ImportValue:
+            !Sub 'Subnet2-${AWS::Region}-${ProductionEnvironment}'
+      LaunchConfigurationName: !Ref S3LoadLaunchConfiguration
+      MinSize: 1
+      MaxSize: 4
+      DesiredCapacity: 1
+    CreationPolicy:
+      AutoScalingCreationPolicy:
+        MinSuccessfulInstancesPercent: 0
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+        PauseTime: PT15M
+        SuspendProcesses:
+          - HealthCheck
+          - ReplaceUnhealthy
+          - AZRebalance
+          - AlarmNotification
+          - ScheduledActions
+        WaitOnResourceSignals: true
+
+  ASGPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref S3LoadASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Condition: CreateProdResources
+    Properties:
+      AlarmDescription: Scale-up if CPU is greater than 60%
+      AlarmActions:
+        - !Sub YOUR_SNS_ARN
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '60'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref S3LoadASG
+
+  S3LoadLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !FindInMap [AWSRegionToAMI, !Ref "AWS::Region", AMI]
+      InstanceType: c4.large
+      KeyName: YOUR_KEY_NAME
+      SecurityGroups:
+        - Fn::ImportValue:
+            !Sub 'ECSHostSecurityGroup-${AWS::Region}-${ProductionEnvironment}'
+      IamInstanceProfile:
+        Fn::ImportValue: 
+         !Sub 'ECSInstanceProfile-${AWS::Region}-${ProductionEnvironment}'
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash
+          yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+          yum install -y aws-cfn-bootstrap hibagent
+          /opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource S3LoadLaunchConfiguration
+          /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource S3LoadASG
+          /usr/bin/enable-ec2-spot-hibernation
+
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              awslogs: []
+
+          commands:
+            01_add_instance_to_cluster:
+              command:
+                Fn::Join:
+                  - ''
+                  - 
+                    - 'echo ECS_CLUSTER='
+                    - Fn::ImportValue:
+                       !Sub 'ECSCluster-${AWS::Region}-${ProductionEnvironment}'
+                    - ' >> /etc/ecs/ecs.config'
+          files:
+            "/etc/cfn/cfn-hup.conf":
+              mode: 000400
+              owner: root
+              group: root
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+            "/etc/cfn/hooks.d/cfn-auto-reloader.conf":
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.S3LoadLaunchConfiguration.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource S3LoadLaunchConfiguration
+            "/etc/awslogs/awscli.conf":
+              content: !Sub |
+                [plugins]
+                cwlogs = cwlogs
+                [default]
+                region = ${AWS::Region}
+            "/etc/awslogs/awslogs.conf":
+              content: !Sub |
+                [general]
+                state_file = /var/lib/awslogs/agent-state
+                [/var/log/dmesg]
+                file = /var/log/dmesg
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/dmesg
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                [/var/log/messages]
+                file = /var/log/messages
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/messages
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %b %d %H:%M:%S
+                [/var/log/docker]
+                file = /var/log/docker
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/docker
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%S.%f
+                [/var/log/ecs/ecs-init.log]
+                file = /var/log/ecs/ecs-init.log.*
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/ecs/ecs-init.log
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+                [/var/log/ecs/ecs-agent.log]
+                file = /var/log/ecs/ecs-agent.log.*
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/ecs/ecs-agent.log
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+                [/var/log/ecs/audit.log]
+                file = /var/log/ecs/audit.log.*
+                log_group_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}-/var/log/ecs/audit.log
+                log_stream_name = ECSCluster-${AWS::Region}-${ProductionEnvironment}
+                datetime_format = %Y-%m-%dT%H:%M:%SZ
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+              awslogs:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - /etc/awslogs/awslogs.conf
+                  - /etc/awslogs/awscli.conf
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub 's3loader-service-${AWS::Region}-${ProductionEnvironment}'
+      Cluster:
+        Fn::ImportValue:
+          !Sub 'ECSCluster-${AWS::Region}-${ProductionEnvironment}'
+      # Role: !Ref ServiceRole
+      DesiredCount: 1
+      TaskDefinition: !Ref S3LoadTask
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+
+  S3LoadTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: !Sub 's3loader-container-${AWS::Region}-${ProductionEnvironment}'
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: PRODUCTION_ENV
+              Value: !Ref ProductionEnvironment
+          Essential: true
+          Image: !Sub YOUR_ECR_IMAGE_FOR_S3_LOADS:latest
+          Memory: 3072
+          PortMappings:
+            - ContainerPort: 8080
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub 's3load-task-${AWS::Region}-${ProductionEnvironment}'
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub 's3load-logs-${AWS::Region}-${ProductionEnvironment}'
+
+Outputs:
+
+  S3LoadService:
+    Value: !Ref Service
+    Export:
+      Name: !Sub 'S3LoadService-${AWS::Region}-${ProductionEnvironment}'

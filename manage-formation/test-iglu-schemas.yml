@@ -1,0 +1,20 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+
+  tasks:
+
+    - name: Lint check schemas
+      command: >
+        java -jar 
+        ../container_files/iglu-repo_dir/igluctl-0.3.0.jar
+        lint
+        ../container_files/iglu-repo_dir/schemas
+
+    - name: execute local test suite
+      command: chdir=../local_test_suite/ sudo python testrunner.py
+      register: test_result
+      failed_when: "'FAILED' in test_result.stderr"

@@ -1,0 +1,109 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+
+  tasks:
+
+    - name: "Deploy collectors"
+      command: >
+        aws ecs update-service
+        --cluster main-ecs-cluster-{{ aws_region }}-{{ production_env }}
+        --service collector-service-{{ aws_region }}-{{ production_env }}
+        --force-new-deployment
+        --deployment-configuration maximumPercent=200,minimumHealthyPercent=0
+        --region {{ aws_region }}
+      when: targets is search("all") or targets is search("collection-service")
+
+    - name: "Deploy bad-es"
+      command: >
+        aws ecs update-service
+        --cluster main-ecs-cluster-{{ aws_region }}-{{ production_env }}
+        --service bad-es-service-{{ aws_region }}-{{ production_env }}
+        --force-new-deployment
+        --deployment-configuration maximumPercent=200,minimumHealthyPercent=100
+        --region {{ aws_region }}
+      when: targets is search("all") or targets is search("bad-es-service")
+
+    - name: "Deploy enrichers"
+      command: >
+        aws ecs update-service
+        --cluster main-ecs-cluster-{{ aws_region }}-{{ production_env }}
+        --service enricher-service-{{ aws_region }}-{{ production_env }}
+        --force-new-deployment
+        --deployment-configuration maximumPercent=200,minimumHealthyPercent=0
+        --region {{ aws_region }}
+      when: targets is search("all") or targets is search("enrichment-service") or targets is search("iglu-repo")
+        
+    - name: "Deploy s3-loaders"
+      command: >
+        aws ecs update-service
+        --cluster main-ecs-cluster-{{ aws_region }}-{{ production_env }}
+        --service s3loader-service-{{ aws_region }}-{{ production_env }}
+        --force-new-deployment
+        --deployment-configuration maximumPercent=200,minimumHealthyPercent=0
+        --region {{ aws_region }}
+      when: targets is search("all") or targets is search("s3load-service")
+
+    - name: "Tearing down bad-es db table"
+      dynamodb_table:
+        name: kinesis-{{ aws_region }}-{{ production_env }}-bad-es-db
+        region: "{{aws_region}}"
+        state: absent
+      when: targets is search("all") or targets is search("bad-es-service")
+
+    - name: "Tearing down enricher db table"
+      dynamodb_table:
+        name: kinesis-{{ aws_region }}-{{ production_env }}-enricher-db
+        region: "{{aws_region}}"
+        state: absent
+      when: targets is search("all") or targets is search("enrichment-service")
+
+    - name: "Tearing down s3loader db table"
+      dynamodb_table:
+        name: kinesis-{{ aws_region }}-{{ production_env }}-s3loader-db
+        region: "{{aws_region}}"
+        state: absent
+      when: targets is search("all") or targets is search("s3load-service")
+
+    - name: "Getting Iglu Repo Public IP"
+      command: >
+        aws cloudformation describe-stacks --region {{ aws_region }}
+        --stack-name iglu-repo-{{ aws_region }}-{{ production_env }} 
+        --query 'Stacks[0].Outputs[?OutputKey==`IgluRepoIP`].OutputValue' --output text
+      register: iglu_ip
+
+    - name: "Getting docker container ID"
+      command: >
+        sudo docker -H
+        {{ iglu_ip.stdout }}
+        ps -q --no-trunc
+      register: iglu_container_id
+
+    - name: "CP new Iglu Schemas to repo"
+      command: >
+        sudo docker -H
+        {{ iglu_ip.stdout }}
+        cp ../container_files/iglu-repo_dir/schemas
+        {{ iglu_container_id.stdout }}:/opt/
+      when: targets is search("all") or targets is search("iglu-repo")
+
+    - name: Regenerate JSON paths
+      command: >
+        java -jar 
+        ../container_files/iglu-repo_dir/igluctl-0.3.0.jar
+        static generate --with-json-paths --output
+        ../container_files/iglu-repo_dir/
+        ../container_files/iglu-repo_dir/schemas/com.your_company/ 
+        --force
+      when: targets is search("all") or targets is search("iglu-repo")
+        
+    - name: "Uploading Json paths to S3"
+      s3_sync:
+        bucket: "pipeline-{{ aws_region }}-{{ production_env }}-iglu"
+        file_root: '{{ jsonpath_dir }}'
+        region: '{{ aws_region }}'
+        file_change_strategy: force
+      when: targets is search("all") or targets is search("iglu-repo")

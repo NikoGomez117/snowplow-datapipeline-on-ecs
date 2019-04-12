@@ -1,0 +1,3 @@
+test
+iglu:com.your_company/test/jsonschema/1-0-0
+{"eventId":"1337"}

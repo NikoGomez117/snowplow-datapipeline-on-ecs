@@ -1,0 +1,81 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+  vars:
+    - container_path: ../container_files
+
+  tasks:
+
+    - name: "Formation: pipeline-vpc-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "pipeline-vpc-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/vpc.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      register: vpc_data
+
+    - name: "Formation: security-config-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "security-config-{{ aws_region }}-{{ production_env }}"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/security-config.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+      register: stack_iglu_access_sg
+
+    - name: "Formation: rs-load-service-{{ aws_region }}-{{ production_env }}-turbo"
+      cloudformation:
+        stack_name: "rs-load-service-{{ aws_region }}-{{ production_env }}-turbo"
+        state: "present"
+        region: "{{ aws_region }}"
+        disable_rollback: "{{ disable_rollback_bool }}"
+        template: "./cf-configs/rs-load-service-turbo-recovery.yml"
+        create_timeout: "{{ create_timeout_min }}"
+        template_parameters:
+          ProductionEnvironment: "{{production_env}}"
+          AccessKey: "{{aws_access_key}}"
+          SecretKey: "{{aws_secret_key}}"
+          ECSHostGroupString: "{{ stack_iglu_access_sg.stack_outputs.ECSHostSecurityGroup }}"
+          ECSHostVPC: "{{ vpc_data.stack_outputs.Subnet2 }}"
+      register: stack_turbo_rs_loader
+
+    # pre provisioning
+    - name: provisioning emr.yml aws_region
+      replace:
+        path: '{{ container_path }}/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/emr.yml'
+        regexp: AWS_REGION
+        replace: '{{ aws_region }}'
+
+    - name: provisioning emr.yml prod_env
+      replace:
+        path: '{{ container_path }}/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/emr.yml'
+        regexp: PRODUCTION_ENV
+        replace: '{{ production_env }}'
+        
+    - name: provisioning rs target with db password
+      replace:
+        path: '{{ container_path }}/rs-loader-turbo_dir/files/dataflow-runner_dir/configs/targets/redshift.conf'
+        regexp: RS_PASSWORD
+        replace: '{{ rs_password }}'
+
+    - name: Execute Recovery
+      command: >
+        sudo python data_recovery.py
+        "{{ container_path }}"
+        "{{ aws_region }}"
+        "{{ aws_access_key }}"
+        "{{ aws_secret_key }}"
+        "{{ production_env }}"
+        "{{ stack_turbo_rs_loader.stack_outputs.TurboEMRCluster }}"
+        "{{ start }}"
+        "{{ end }}"

@@ -1,0 +1,137 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  user: root
+  pre_tasks:
+    - include_vars: variables.yml
+
+  tasks:
+    - name: "Tearing Down rs-load-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "rs-load-service-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("rs-load-service")
+
+    - name: "Tearing Down s3load-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "s3load-service-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("s3load-service")
+
+    - name: "Tearing Down bad-es-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "bad-es-service-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("bad-es-service")
+
+    - name: "Tearing Down enrichment-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "enrichment-service-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("enrichment-service")
+
+    - name: "Tearing Down collection-service-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "collection-service-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("collection-service")
+
+    - name: "Tearing Down iglu-repo-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "iglu-repo-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("iglu-repo")
+
+    - name: "Tearing Down pipeline-ecs-cluster-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "pipeline-ecs-cluster-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("ecs-cluster")
+
+    - name: "Deleting Resource pipeline-{{ aws_region }}-{{production_env}}-bad-recovered"
+      aws_s3:
+        bucket: 'pipeline-{{ aws_region }}-{{production_env}}-bad-recovered'
+        force: yes
+        region: "{{aws_region}}"
+        mode: delete
+      when: targets is search("all") or targets is search("storage-systems")
+
+    - name: "Deleting Resource pipeline-{{ aws_region }}-{{production_env}}-bad"
+      aws_s3:
+        bucket: 'pipeline-{{ aws_region }}-{{production_env}}-bad'
+        force: yes
+        region: "{{aws_region}}"
+        mode: delete
+      when: targets is search("all") or targets is search("storage-systems")
+
+    - name: "Deleting Resource pipeline-{{ aws_region }}-{{production_env}}-good"
+      aws_s3:
+        bucket: 'pipeline-{{ aws_region }}-{{production_env}}-good'
+        force: yes
+        region: "{{aws_region}}"
+        mode: delete
+      when: targets is search("all") or targets is search("storage-systems")
+
+    - name: "Deleting Resource pipeline-{{ aws_region }}-{{production_env}}-iglu"
+      aws_s3:
+        bucket: 'pipeline-{{ aws_region }}-{{production_env}}-iglu'
+        force: yes
+        region: "{{aws_region}}"
+        mode: delete
+      when: targets is search("all") or targets is search("storage-systems")
+
+    - name: "Tearing Down storage-systems-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "storage-systems-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("storage-systems")
+
+    - name: "Tearing Down security-config-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "security-config-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("security-config")
+
+    - name: "Tearing Down exec-iam-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "exec-iam-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("exec-iam")
+
+    - name: "Tearing Down pipeline-vpc-{{ aws_region }}-{{ production_env }}"
+      cloudformation:
+        stack_name: "pipeline-vpc-{{ aws_region }}-{{ production_env }}"
+        region: "{{aws_region}}"
+        state: "absent"
+      when: targets is search("all") or targets is search("vpc")
+
+    - name: "Deleting Resource kinesis-{{ aws_region }}-{{ production_env }}-bad-es-db"
+      dynamodb_table:
+        name: kinesis-{{ aws_region }}-{{ production_env }}-bad-es-db
+        region: "{{aws_region}}"
+        state: absent
+      when: targets is search("all") or targets is search("bad-es-service")
+
+    - name: "Deleting Resource kinesis-{{ aws_region }}-{{ production_env }}-enricher-db"
+      dynamodb_table:
+        name: kinesis-{{ aws_region }}-{{ production_env }}-enricher-db
+        region: "{{aws_region}}"
+        state: absent
+      when: targets is search("all") or targets is search("enrichment-service")
+
+    - name: "Deleting Resource kinesis-{{ aws_region }}-{{ production_env }}-s3loader-db"
+      dynamodb_table:
+        name: kinesis-{{ aws_region }}-{{ production_env }}-s3loader-db
+        region: "{{aws_region}}"
+        state: absent
+      when: targets is search("all") or targets is search("s3load-service")

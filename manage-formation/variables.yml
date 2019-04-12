@@ -1,0 +1,15 @@
+aws_access_key: YOUR_AWS_ACCESS_KEY
+aws_secret_key: YOUR_AWS_SECRET_KEY
+key_name: YOUR_KEY_NAME
+rs_password: YOUR_REDSHIFT_PASSWORD
+aws_region: YOUR_AWS_REGION
+
+# Exec Settings
+disable_rollback_bool: true
+create_timeout_min: 60
+
+# We used dev and prod
+production_env: YOUR_PRODUCTION_ENV
+
+jsonpath_dir: ../container_files/iglu-repo_dir/jsonpaths
+targets: all
