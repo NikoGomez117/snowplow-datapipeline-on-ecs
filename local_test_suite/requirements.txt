@@ -25,7 +25,7 @@ psutil==5.4.7
 ptyprocess==0.6.0
 py==1.6.0
 PyContracts==1.7.6
-Pygments==2.2.0
+Pygments==2.7.4
 pyparsing==2.2.0
 pytest==3.7.4
 pytest-logging==2015.11.4
